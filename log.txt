@@ -1,0 +1,10 @@
+- create environment
+- create gitignore
+- setup mlflow
+- create readme
+
+04/13
+- categorize quality < 6.5 as bad > 6.5 as good
+- now it becomes a binary classification tasks
+- use it to train on a deep learning model
+- using svc has a better performance than deep learning (might)
