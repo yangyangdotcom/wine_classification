@@ -17,7 +17,14 @@ conda activate <env_name>
 pip install -r requirements.txt
 ```
 
-## Run the mlflow server
+## Track the experiments using mlflow
+
+Start the mlflow server
 ```
 mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
 ```
+Run the experiments
+```
+python train.py
+```
+Access the localhost to view all the experiment performances and more
