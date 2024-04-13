@@ -1,0 +1,12 @@
+mlflow
+jupyter
+scikit-learn
+tensorflow
+pandas
+seaborn
+numpy
+hyperopt
+xgboost
+fastparquet
+boto3
+
