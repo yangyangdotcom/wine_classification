@@ -25,6 +25,10 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlru
 ```
 Run the experiments
 ```
-python train.py
+python train_dl.py
+```
+OR
+```
+python train_svc.py
 ```
 Access the localhost to view all the experiment performances and more
