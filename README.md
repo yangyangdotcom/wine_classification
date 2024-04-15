@@ -32,3 +32,13 @@ OR
 python train_svc.py
 ```
 Access the localhost to view all the experiment performances and more
+
+## Prefect
+Prefect is being used here for managing the workflow execution, ensuring tasks are run in the correct order and handling any failure
+
+We can start the prefect server by running
+```
+prefect server start
+```
+Access the localhost after running any train python files and you can see the flow runs
+
