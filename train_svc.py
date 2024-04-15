@@ -12,10 +12,9 @@ import mlflow
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt.pyll import scope
 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
-mlflow.set_experiment("wine-classification-experiment-svc")
-mlflow.sklearn.autolog()
+from prefect import flow, task
 
+@task
 def divide_wine_quality(data):
     bins = (2, 6.5, 8)
     group_names = ['bad', 'good']
@@ -25,6 +24,7 @@ def divide_wine_quality(data):
     data['quality'] = label_quality.fit_transform(data['quality'])
     return data
 
+@task
 def read_data(path):
     data = pd.read_csv(path)
 
@@ -52,44 +52,64 @@ def read_data(path):
 def encode_data(y):
     return to_categorical(y)
 
-X, y = read_data('data.csv')
-# y_encoded = encode_data(y)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+@task
+def preprocessing(X_train, X_test):
+    '''
+    Apply standard scalar
+    '''
+    sc = StandardScaler()
+    X_train = sc.fit_transform(X_train)
+    X_test = sc.fit_transform(X_test)
+    return X_train, X_test
 
-'''
-Apply standard scalar
-'''
-sc = StandardScaler()
-X_train = sc.fit_transform(X_train)
-X_test = sc.fit_transform(X_test)
+@task(log_prints=True)
+def train_hyperparameter_tuning(X_train, X_test, y_train, y_test):
+    space = {
+        'C': hp.quniform('C', 0.1, 2, 0.1),
+        'gamma': hp.quniform('gamma', 0.1, 2, 0.1),
+        'kernel': hp.choice('kernel', ['linear', 'poly', 'rbf', 'sigmoid'])
+    }
+    
+    def objective(params):
+        with mlflow.start_run():
+            mlflow.set_tag("developer", "bnai")
 
-def objective(params):
-    with mlflow.start_run():
-        mlflow.set_tag("developer", "bnai")
+            svc = SVC(C = params['C'], gamma =  params['gamma'], kernel= params['kernel'])
+            svc.fit(X_train, y_train)
+            pred_svc = svc.predict(X_test)
 
-        svc = SVC(C = params['C'], gamma =  params['gamma'], kernel= params['kernel'])
-        svc.fit(X_train, y_train)
-        pred_svc = svc.predict(X_test)
+            test_acc = accuracy_score(y_test, pred_svc)
 
-        test_acc = accuracy_score(y_test, pred_svc)
+            # Log parameters and metrics
+            mlflow.log_params(params)
+            mlflow.log_metric("accuracy", test_acc)
 
-        # Log parameters and metrics
-        mlflow.log_params(params)
-        mlflow.log_metric("accuracy", test_acc)
+            return {'loss': -test_acc, 'status': STATUS_OK, 'model': svc}
 
-        return {'loss': -test_acc, 'status': STATUS_OK, 'model': svc}
+    trials = Trials()
+    best = fmin(fn=objective,
+                space=space,
+                algo=tpe.suggest,
+                max_evals=100,
+                trials=trials)
 
-space = {
-    'C': hp.quniform('C', 0.1, 2, 0.1),
-    'gamma': hp.quniform('gamma', 0.1, 2, 0.1),
-    'kernel': hp.choice('kernel', ['linear', 'poly', 'rbf', 'sigmoid'])
-}
+    return best
 
-trials = Trials()
-best = fmin(fn=objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=100,
-            trials=trials)
+@flow
+def main_flow():
 
-print(best)
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_experiment("wine-classification-experiment-svc")
+    mlflow.sklearn.autolog()
+
+    X, y = read_data('data.csv')
+    # y_encoded = encode_data(y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test = preprocessing(X_train, X_test)
+    best_result = train_hyperparameter_tuning(X_train, X_test, y_train, y_test)
+
+
+if __name__ == "__main__":
+    main_flow()
+
+

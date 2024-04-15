@@ -14,9 +14,9 @@ import mlflow
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt.pyll import scope
 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
-mlflow.set_experiment("wine-classification-experiment")
+from prefect import flow, task
 
+@task
 def divide_wine_quality(data):
     bins = (2, 6.5, 8)
     group_names = ['bad', 'good']
@@ -26,6 +26,7 @@ def divide_wine_quality(data):
     data['quality'] = label_quality.fit_transform(data['quality'])
     return data
 
+@task
 def read_data(path):
     data = pd.read_csv(path)
 
@@ -53,63 +54,90 @@ def read_data(path):
 def encode_data(y):
     return to_categorical(y)
 
-X, y = read_data('data.csv')
-# y_encoded = encode_data(y)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+@task
+def preprocessing(X_train, y_train):
+    '''
+    Apply SMOTE
+    '''
+    smote = SMOTE(random_state=42)
+    X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
+    return X_train_smote, y_train_smote
 
-'''
-Apply SMOTE
-'''
-smote = SMOTE(random_state=42)
-X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
+@task
+def train_hyperparameter_tuning(X_train, X_test, y_train, y_test):
+    space = {
+        'units1': scope.int(hp.quniform('units1', 50, 150, 1)),
+        'units2': scope.int(hp.quniform('units2', 30, 120, 1)),
+        'units3': scope.int(hp.quniform('units3', 20, 100, 1)),
+        'dropout': hp.uniform('dropout', 0.1, 0.5),
+        'activation': hp.choice('activation', ['relu', 'tanh']),
+        'l2': hp.loguniform('l2', np.log(0.0001), np.log(0.01)),
+        'optimizer': hp.choice('optimizer', ['adam', 'sgd']),
+        'batch_size': hp.quniform('batch_size', 16, 64, 1)
+    }
 
-def objective(params):
-    with mlflow.start_run():
-        mlflow.set_tag("developer", "bnai")
-        # Log parameters
-        mlflow.log_params(params)
+    def objective(params):
+        with mlflow.start_run():
+            mlflow.set_tag("developer", "bnai")
+            # Log parameters
+            mlflow.log_params(params)
 
-        model = Sequential([
-            Dense(params['units1'], activation=params['activation'], kernel_regularizer=l2(params['l2'])),
-            Dropout(params['dropout']),
-            Dense(params['units2'], activation=params['activation'], kernel_regularizer=l2(params['l2'])),
-            Dropout(params['dropout']),
-            Dense(params['units3'], activation=params['activation'], kernel_regularizer=l2(params['l2'])),
-            Dense(y_train_smote.shape[1], activation='softmax')
-        ])
+            model = Sequential([
+                Dense(params['units1'], activation=params['activation'], kernel_regularizer=l2(params['l2'])),
+                Dropout(params['dropout']),
+                Dense(params['units2'], activation=params['activation'], kernel_regularizer=l2(params['l2'])),
+                Dropout(params['dropout']),
+                Dense(params['units3'], activation=params['activation'], kernel_regularizer=l2(params['l2'])),
+                Dense(y_train.shape[1], activation='softmax')
+            ])
 
-        model.compile(optimizer=params['optimizer'],
-                      loss='categorical_crossentropy',
-                      metrics=['accuracy'])
-        
-        model.fit(X_train_smote, y_train_smote, epochs=50, batch_size=int(params['batch_size']),
-                  validation_split=0.2, verbose=1)
-        
-        test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
-        
-        # Log metrics
-        mlflow.log_metric("test_accuracy", test_acc)
-        mlflow.log_metric("test_loss", test_loss)
-        
-        # Here we aim to minimize loss, hence return the loss
-        return {'loss': -test_acc, 'status': STATUS_OK, 'model': model}
+            model.compile(optimizer=params['optimizer'],
+                        loss='categorical_crossentropy',
+                        metrics=['accuracy'])
 
-space = {
-    'units1': scope.int(hp.quniform('units1', 50, 150, 1)),
-    'units2': scope.int(hp.quniform('units2', 30, 120, 1)),
-    'units3': scope.int(hp.quniform('units3', 20, 100, 1)),
-    'dropout': hp.uniform('dropout', 0.1, 0.5),
-    'activation': hp.choice('activation', ['relu', 'tanh']),
-    'l2': hp.loguniform('l2', np.log(0.0001), np.log(0.01)),
-    'optimizer': hp.choice('optimizer', ['adam', 'sgd']),
-    'batch_size': hp.quniform('batch_size', 16, 64, 1)
-}
+            model.fit(X_train, y_train, epochs=50, batch_size=int(params['batch_size']),
+                    validation_split=0.2, verbose=1)
 
-trials = Trials()
-best = fmin(fn=objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=100,
-            trials=trials)
+            test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
 
-print(best)
+            # Log metrics
+            mlflow.log_metric("test_accuracy", test_acc)
+            mlflow.log_metric("test_loss", test_loss)
+
+            # Save the model to the local file system
+            model_path = "model.h5"
+            model.save(model_path)
+
+            # Log the model as an artifact
+            mlflow.log_artifact(model_path, artifact_path="models")
+
+            # Clear TensorFlow session
+            tf.keras.backend.clear_session()
+
+            return {'loss': -test_acc, 'status': STATUS_OK, 'model': model}
+
+
+    trials = Trials()
+    best = fmin(fn=objective,
+                space=space,
+                algo=tpe.suggest,
+                max_evals=100,
+                trials=trials)
+
+    return best
+
+@flow
+def main_flow():
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    mlflow.set_experiment("wine-classification-experiment")
+    mlflow.keras.autolog()
+
+    X, y = read_data('data.csv')
+    # y_encoded = encode_data(y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    X_train, y_train = preprocessing(X_train, y_train)
+    best_result = train_hyperparameter_tuning(X_train, X_test, y_train, y_test)
+
+if __name__ == "__main__":
+    main_flow()
