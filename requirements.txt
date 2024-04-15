@@ -9,4 +9,14 @@ hyperopt
 xgboost
 fastparquet
 boto3
+black
+fastparquet
+hyperopt
+mlflow
+pandas
+prefect
+prefect-aws
+scikit_learn
+seaborn
+orjson
 
