@@ -42,3 +42,22 @@ prefect server start
 ```
 Access the localhost after running any train python files and you can see the flow runs
 
+## Deploy using Flask
+predict.py serves as a RESTful API for serving predictions from a machine learning model trained with MLflow. We can start it by running 
+```
+python predict.py
+```
+We can test the api by using  test_flask.py. Simply run the following command in a new terminal
+```
+python test_flask.py
+```
+
+## Docker
+Dockerfile provides a standardized and reproducible way to package and deploy applications as Docker containers. We can build the docker image by running:
+```
+docker build -t <docker_name> .
+```
+Once the image is built, we can run a container based on it using:
+```
+docker run -p 9696:9696 my_mlflow_app
+```
